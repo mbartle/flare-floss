@@ -19,3 +19,10 @@ lib/
 
 # Test executables
 bin/
+
+# Pycharm idea directory
+.idea/
+
+# Pycharm Python venv
+venv/
+

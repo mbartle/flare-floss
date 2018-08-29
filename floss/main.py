@@ -173,6 +173,8 @@ def make_parser():
                             action="store_true")
     format_group.add_option("-q", "--quiet", dest="quiet", action="store_true",
                             help="suppress headers and formatting to print only extracted strings")
+    format_group.add_option("-j", "--json", dest="json", action="store_true",
+                            help="output formatted in JSON for easy reading by other applications")
     parser.add_option_group(format_group)
 
     logging_group = OptionGroup(parser, "Logging Options")
@@ -737,6 +739,23 @@ def create_r2_script(sample_file_path, r2_script_file, decoded_strings, stack_st
             raise e
     # TODO return, catch exception in main()
 
+def get_static_jsons(path, min_length):
+    """
+        Return dictionary with static ASCII and UTF-16 strings from provided file.
+        :param path: input file
+        :param min_length: minimum string length
+        """
+    with open(path, "rb") as f:
+        b = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+
+        ascii_strings = [s.s for s in strings.extract_ascii_strings(b, n=min_length)]
+        utf16_strings = [s.s for s in strings.extract_unicode_strings(b, n=min_length)]
+
+        if os.path.getsize(path) > sys.maxint:
+            floss_logger.warning("File too large, strings listings may be truncated.")
+            floss_logger.warning("FLOSS cannot handle files larger than 4GB on 32bit systems.")
+
+        return {'ascii_strings': ascii_strings, 'utf16_strings': utf16_strings}
 
 def print_static_strings(path, min_length, quiet=False):
     """
@@ -748,42 +767,23 @@ def print_static_strings(path, min_length, quiet=False):
     with open(path, "rb") as f:
         b = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
 
-        if os.path.getsize(path) > MAX_FILE_SIZE:
-            # for large files, there might be a huge number of strings,
-            # so don't worry about forming everything into a perfect table
-            if not quiet:
-                print("FLOSS static ASCII strings")
-            for s in strings.extract_ascii_strings(b, n=min_length):
-                print("%s" % s.s)
-            if not quiet:
-                print("")
+        if not quiet:
+            print("FLOSS static ASCII strings")
+        for s in strings.extract_ascii_strings(b, n=min_length):
+            print("%s" % s.s)
+        if not quiet:
+            print("")
 
-            if not quiet:
-                print("FLOSS static Unicode strings")
-            for s in strings.extract_unicode_strings(b, n=min_length):
-                print("%s" % s.s)
-            if not quiet:
-                print("")
+        if not quiet:
+            print("FLOSS static UTF-16 strings")
+        for s in strings.extract_unicode_strings(b, n=min_length):
+            print("%s" % s.s)
+        if not quiet:
+            print("")
 
-            if os.path.getsize(path) > sys.maxint:
-                floss_logger.warning("File too large, strings listings may be truncated.")
-                floss_logger.warning("FLOSS cannot handle files larger than 4GB on 32bit systems.")
-
-        else:
-            # for reasonably sized files, we can read all the strings at once
-            if not quiet:
-                print("FLOSS static ASCII strings")
-            for s in strings.extract_ascii_strings(b, n=min_length):
-                print("%s" % (s.s))
-            if not quiet:
-                print("")
-
-            if not quiet:
-                print("FLOSS static UTF-16 strings")
-            for s in strings.extract_unicode_strings(b, n=min_length):
-                print("%s" % (s.s))
-            if not quiet:
-                print("")
+        if os.path.getsize(path) > sys.maxint:
+            floss_logger.warning("File too large, strings listings may be truncated.")
+            floss_logger.warning("FLOSS cannot handle files larger than 4GB on 32bit systems.")
 
 
 def print_stack_strings(extracted_strings, quiet=False, expert=False):
@@ -894,17 +894,26 @@ def main(argv=None):
         options.group_functions = True
         options.quiet = False
 
+    if options.json:
+        strings_dict = {}
+
     if not is_workspace_file(sample_file_path):
         if not options.no_static_strings and not options.functions:
             floss_logger.info("Extracting static strings...")
-            print_static_strings(sample_file_path, min_length=min_length, quiet=options.quiet)
+            if options.json:
+                strings_dict.update(get_static_jsons(sample_file_path, min_length=min_length))
+            else:
+                print_static_strings(sample_file_path, min_length=min_length, quiet=options.quiet)
 
         if options.no_decoded_strings and options.no_stack_strings and not options.should_show_metainfo:
             # we are done
             return 0
 
     if os.path.getsize(sample_file_path) > MAX_FILE_SIZE:
-        floss_logger.error("FLOSS cannot extract obfuscated strings or stackstrings from files larger than"
+        if options.json:
+            print("MAX_SIZE_ERROR")
+        else:
+            floss_logger.error("FLOSS cannot extract obfuscated strings or stackstrings from files larger than"
                            " %d bytes" % MAX_FILE_SIZE)
         return 1
 
@@ -926,7 +935,7 @@ def main(argv=None):
     floss_logger.debug("Selected the following plugins: %s", ", ".join(map(str, selected_plugin_names)))
     selected_plugins = filter(lambda p: str(p) in selected_plugin_names, get_all_plugins())
 
-    if options.should_show_metainfo:
+    if options.should_show_metainfo and not options.json:
         meta_functions = None
         if options.functions:
             meta_functions = selected_functions
@@ -937,14 +946,19 @@ def main(argv=None):
     if not options.no_decoded_strings:
         floss_logger.info("Identifying decoding functions...")
         decoding_functions_candidates = im.identify_decoding_functions(vw, selected_plugins, selected_functions)
-        if options.expert:
+        if options.expert and not options.json:
             print_identification_results(sample_file_path, decoding_functions_candidates)
 
         floss_logger.info("Decoding strings...")
         decoded_strings = decode_strings(vw, decoding_functions_candidates, min_length, options.no_filter, options.max_instruction_count)
         if not options.expert:
             decoded_strings = filter_unique_decoded(decoded_strings)
-        print_decoding_results(decoded_strings, options.group_functions, quiet=options.quiet, expert=options.expert)
+
+        if options.json:
+            strings_dict.update({'decoded_strings': [sanitize_string_for_printing(ds.s) for ds in decoded_strings]})
+        else:
+            print_decoding_results(decoded_strings, options.group_functions, quiet=options.quiet, expert=options.expert)
+
     else:
         decoded_strings = []
 
@@ -955,7 +969,11 @@ def main(argv=None):
         if not options.expert:
             # remove duplicate entries
             stack_strings = set(stack_strings)
-        print_stack_strings(stack_strings, quiet=options.quiet, expert=options.expert)
+
+        if options.json:
+            strings_dict.update({'stack_strings': [ss.s for ss in stack_strings]})
+        else:
+            print_stack_strings(stack_strings, quiet=options.quiet, expert=options.expert)
     else:
         stack_strings = []
 
@@ -973,9 +991,11 @@ def main(argv=None):
         create_r2_script(sample_file_path, options.radare2_script_file, decoded_strings, stack_strings)
 
     time1 = time()
-    if not options.quiet:
+    if not options.quiet and not options.json:
         print("\nFinished execution after %f seconds" % (time1 - time0))
 
+    if options.json:
+        print(json.dumps(strings_dict))
     return 0
 
 
