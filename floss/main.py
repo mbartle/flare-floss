@@ -36,7 +36,6 @@ floss_logger = logging.getLogger("floss")
 
 KILOBYTE = 1024
 MEGABYTE = 1024 * KILOBYTE
-MAX_FILE_SIZE = 16 * MEGABYTE
 
 SUPPORTED_FILE_MAGIC = set(["MZ"])
 
@@ -147,6 +146,8 @@ def make_parser():
                       action="store_true")
     parser.add_option("--max-instruction-count", dest="max_instruction_count", type=int, default=20000,
                       help="maximum number of instructions to emulate per function")
+    parser.add_option("--max-file-size", dest="max_file_size", type=int, default=16,
+                      help="maximum filesize, in megabytes, for which FLOSS will attempt to decode strings")
 
     shellcode_group = OptionGroup(parser, "Shellcode options", "Analyze raw binary file containing shellcode")
     shellcode_group.add_option("-s", "--shellcode", dest="is_shellcode", help="analyze shellcode",
@@ -909,12 +910,14 @@ def main(argv=None):
             # we are done
             return 0
 
-    if os.path.getsize(sample_file_path) > MAX_FILE_SIZE:
+    max_file_size = options.max_file_size * MEGABYTE
+
+    if os.path.getsize(sample_file_path) > max_file_size:
         if options.json:
             print("MAX_SIZE_ERROR")
         else:
             floss_logger.error("FLOSS cannot extract obfuscated strings or stackstrings from files larger than"
-                           " %d bytes" % MAX_FILE_SIZE)
+                           " %d bytes" % max_file_size)
         return 1
 
     try:
